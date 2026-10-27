@@ -1,0 +1,7 @@
+Flask>=3.0.0
+scikit-learn>=1.4.0
+numpy>=1.24.0
+python-dotenv>=1.0.0
+pytest>=8.0.0
+# Optional lightweight embedding transformer (portal automatically defaults to high-accuracy subword TF-IDF + domain ontology if not installed)
+# sentence-transformers>=2.2.0
