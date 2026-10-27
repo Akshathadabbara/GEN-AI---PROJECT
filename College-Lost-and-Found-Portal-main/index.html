@@ -3,23 +3,133 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>College Lost & Found Portal</title>
+    <title>College Lost & Found Portal | GenAI Powered</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <header>
         <h1>🏛️ College Lost & Found Portal</h1>
-        <p>Connecting Students, Reuniting Belongings</p>
+        <p>Connecting Students, Reuniting Belongings with Generative AI & Vector RAG</p>
         <nav>
             <ul>
-                <li><a href="#lost-items">Lost Items</a></li>
-                <li><a href="#found-items">Found Items</a></li>
-                <li><a href="#report-item">Report Item</a></li>
+                <li><a href="#ai-search">🤖 AI Natural Search</a></li>
+                <li><a href="#lost-items">📱 Lost Items</a></li>
+                <li><a href="#found-items">🔍 Found Items</a></li>
+                <li><a href="#report-item">📝 Report Item</a></li>
             </ul>
         </nav>
     </header>
 
     <main>
+        <!-- AI-Powered Natural Language RAG Search Section -->
+        <section id="ai-search" class="ai-search-section">
+            <div class="search-header">
+                <h2>🤖 Find Lost Belongings with AI</h2>
+                <p class="search-subtitle">
+                    Describe what you lost or found in simple, natural language. Our semantic vector search and LLM will find potential matches even when your wording differs!
+                </p>
+            </div>
+
+            <div class="search-controls-card">
+                <div class="search-box-row">
+                    <div class="input-wrapper">
+                        <span class="search-icon">🔍</span>
+                        <input 
+                            type="text" 
+                            id="ai-search-input" 
+                            placeholder='e.g., "I lost my dark-colored purse near the library yesterday" or "Found a blue water bottle in classroom"'
+                            autocomplete="off"
+                        >
+                        <button id="ai-clear-btn" class="clear-btn hidden" title="Clear query">✕</button>
+                    </div>
+                    <button id="ai-search-btn" class="search-btn">
+                        <span class="btn-text">Search with AI</span>
+                    </button>
+                </div>
+
+                <div class="search-filter-chips">
+                    <span class="chip-label">Search Scope:</span>
+                    <label class="chip">
+                        <input type="radio" name="search-scope" value="all" checked>
+                        <span>🌐 All Items</span>
+                    </label>
+                    <label class="chip">
+                        <input type="radio" name="search-scope" value="found">
+                        <span>🔍 Looking for Found Items</span>
+                    </label>
+                    <label class="chip">
+                        <input type="radio" name="search-scope" value="lost">
+                        <span>📱 Looking for Lost Reports</span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Loading Indicator -->
+            <div id="ai-loading" class="ai-loading-card hidden">
+                <div class="pulsing-spinner"></div>
+                <div class="loading-text">
+                    <strong>Consulting Vector Database & AI Model...</strong>
+                    <p>Generating semantic vector embeddings and retrieving matching database records.</p>
+                </div>
+            </div>
+
+            <!-- Missing API Key Notice (Clear Setup Message) -->
+            <div id="ai-setup-notice" class="ai-setup-notice hidden">
+                <div class="notice-icon">⚙️</div>
+                <div class="notice-content">
+                    <h4>OpenAI API Key Not Configured</h4>
+                    <p>
+                        To activate conversational AI explanations, add your <code>OPENAI_API_KEY</code> to the <code>.env</code> file in your backend and restart the portal.
+                    </p>
+                    <p class="notice-sub">
+                        <em>Semantic vector search is fully active! Matching records retrieved directly from the database are displayed below.</em>
+                    </p>
+                </div>
+            </div>
+
+            <!-- Search Error Notice -->
+            <div id="ai-error-notice" class="ai-error-notice hidden">
+                <span class="error-icon">⚠️</span>
+                <span id="ai-error-text">An error occurred during search.</span>
+            </div>
+
+            <!-- Grounded AI Match Rationale Summary -->
+            <div id="ai-summary-card" class="ai-summary-card hidden">
+                <div class="summary-top">
+                    <span class="ai-badge">✨ AI Grounded Analysis</span>
+                    <span class="disclaimer-badge">Possible matches — not confirmed ownership</span>
+                </div>
+                <p id="ai-summary-text" class="summary-body"></p>
+            </div>
+
+            <!-- Results Section -->
+            <div id="ai-results-wrapper" class="hidden">
+                <div class="results-heading-row">
+                    <h3 id="ai-results-count">Matching Belongings Found in Database</h3>
+                    <button id="ai-reset-results-btn" class="reset-link">Clear Results</button>
+                </div>
+                <div id="ai-results-container" class="item-grid">
+                    <!-- Matching item cards loaded dynamically by script.js -->
+                </div>
+            </div>
+
+            <!-- Empty Results Notice -->
+            <div id="ai-empty-state" class="ai-empty-card hidden">
+                <div class="empty-icon">🔎</div>
+                <h3>No Matching Belongings Found</h3>
+                <p id="ai-empty-text">We couldn't find any active records matching your description.</p>
+                <div class="empty-tips">
+                    <strong>Suggestions:</strong>
+                    <ul>
+                        <li>Try describing colors, brands, or key identifying marks.</li>
+                        <li>Include the campus building, floor, or cafeteria location.</li>
+                        <li>Check if your item was reported under a different category or report a new lost item below.</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <!-- Recently Lost Items Section -->
         <section id="lost-items" class="item-list">
             <h2>📱 Recently Lost Items</h2>
             <div id="lost-items-container" class="item-grid">
@@ -27,6 +137,7 @@
             </div>
         </section>
 
+        <!-- Recently Found Items Section -->
         <section id="found-items" class="item-list">
             <h2>🔍 Recently Found Items</h2>
             <div id="found-items-container" class="item-grid">
@@ -34,6 +145,7 @@
             </div>
         </section>
 
+        <!-- Report Item Section -->
         <section id="report-item" class="report-form">
             <h2>📝 Report a Lost or Found Item</h2>
             <form id="item-report-form">
@@ -47,13 +159,31 @@
                     </select>
 
                     <label for="item_name">Item Name:</label>
-                    <input type="text" id="item_name" name="item_name" placeholder="e.g., iPhone 13, Wallet, Laptop" required>
+                    <input type="text" id="item_name" name="item_name" placeholder="e.g., iPhone 13, Wallet, Laptop, Water Bottle" required>
 
-                    <label for="description">Description:</label>
-                    <textarea id="description" name="description" rows="4" placeholder="Describe the item in detail (color, brand, distinctive features, etc.)"></textarea>
+                    <label for="category">Category:</label>
+                    <select id="category" name="category">
+                        <option value="Other">Select Category</option>
+                        <option value="Electronics">Electronics (Phone, Laptop, Earbuds)</option>
+                        <option value="Wallets & Bags">Wallets, Bags & Backpacks</option>
+                        <option value="Bottles & Flasks">Bottles & Flasks</option>
+                        <option value="Keys">Keys & Keychains</option>
+                        <option value="Books & Stationery">Books & Stationery</option>
+                        <option value="Clothing & Accessories">Clothing & Accessories</option>
+                        <option value="Other">Other</option>
+                    </select>
+
+                    <label for="color">Primary Color:</label>
+                    <input type="text" id="color" name="color" placeholder="e.g., Black, Navy Blue, Silver">
+
+                    <label for="brand">Brand / Model:</label>
+                    <input type="text" id="brand" name="brand" placeholder="e.g., Apple, Milton, Casio, Wildcraft">
+
+                    <label for="description">Detailed Description:</label>
+                    <textarea id="description" name="description" rows="4" placeholder="Describe the item in detail (color, brand, distinctive stickers, scratches, case, etc.)"></textarea>
 
                     <label for="location">Location (where lost/found):</label>
-                    <input type="text" id="location" name="location" placeholder="e.g., Library, Cafeteria, Parking Lot">
+                    <input type="text" id="location" name="location" placeholder="e.g., Library 2nd floor, Cafeteria, Classroom 301, Parking Lot">
                 </div>
 
                 <div class="form-section">
@@ -100,7 +230,7 @@
     </main>
 
     <footer>
-        <p>&copy; 2024 College Lost & Found Portal | Made with ❤️ for Students</p>
+        <p>&copy; 2026 College Lost & Found Portal | Powered by Semantic RAG & Generative AI</p>
     </footer>
 
     <script src="script.js"></script>

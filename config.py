@@ -11,11 +11,19 @@ SIMILARITY_THRESHOLD = float(os.getenv("MATCH_THRESHOLD", "0.28"))
 STRONG_MATCH_THRESHOLD = float(os.getenv("STRONG_MATCH_THRESHOLD", "0.65"))
 POSSIBLE_MATCH_THRESHOLD = float(os.getenv("POSSIBLE_MATCH_THRESHOLD", "0.40"))
 
-# LLM Configuration
+# Vector Store (ChromaDB) Configuration
+CHROMA_PATH = os.getenv("CHROMA_PATH", os.path.join(BASE_DIR, "chroma_data"))
+CHROMA_COLLECTION = os.getenv("CHROMA_COLLECTION", "items_rag")
+
+# LLM Configuration (OpenAI primary, Gemini optional)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_TIMEOUT = int(os.getenv("OPENAI_TIMEOUT", "10"))
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini")  # or "none" / "mock"
-LLM_MODEL = os.getenv("LLM_MODEL", "gemini-1.5-flash")
-LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "8"))
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai")  # "openai", "gemini", or "none"
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
+LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "10"))
 
 # Admin / Security
 ADMIN_KEY = os.getenv("ADMIN_KEY", "campus_admin_secret_2026")

@@ -14,9 +14,15 @@ __pycache__/
 .coverage
 htmlcov/
 
+# Vector Database & Data Cache
+chroma_data/
+test_chroma*/
+*.db
+
 # Editor / OS
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
 tempCodeRunnerFile.py
+
