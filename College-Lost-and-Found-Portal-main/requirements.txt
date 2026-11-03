@@ -5,6 +5,8 @@ python-dotenv>=1.0.0
 pytest>=8.0.0
 chromadb>=0.5.0
 openai>=1.30.0
-# Optional lightweight embedding transformer (portal automatically defaults to high-accuracy subword TF-IDF + domain ontology if not installed)
+
+# Optional lightweight embedding transformer
 # sentence-transformers>=2.2.0
+
 gunicorn
