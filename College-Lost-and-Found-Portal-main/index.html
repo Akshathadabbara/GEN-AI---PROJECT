@@ -16,9 +16,19 @@
                 <li><a href="#lost-items">📱 Lost Items</a></li>
                 <li><a href="#found-items">🔍 Found Items</a></li>
                 <li><a href="#report-item">📝 Report Item</a></li>
+                <li><button id="admin-nav-btn" class="nav-admin-link">🛡️ Staff Admin</button></li>
             </ul>
         </nav>
     </header>
+
+    <!-- Admin Status Banner -->
+    <div id="admin-banner" class="admin-banner hidden">
+        <div class="admin-banner-content">
+            <span class="admin-badge">🛡️ Staff Administrator Mode Active</span>
+            <span class="admin-desc">You are authenticated. Protected student contacts and administrative deletion controls are unlocked.</span>
+        </div>
+        <button id="admin-logout-btn" class="admin-logout-btn">Log Out</button>
+    </div>
 
     <main>
         <!-- AI-Powered Natural Language RAG Search Section -->
@@ -232,6 +242,54 @@
     <footer>
         <p>&copy; 2026 College Lost & Found Portal | Powered by Semantic RAG & Generative AI</p>
     </footer>
+
+    <!-- Admin Authentication Modal -->
+    <div id="admin-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="admin-modal-title">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3 id="admin-modal-title">🛡️ Staff Administrator Login</h3>
+                <button id="admin-modal-close" class="modal-close-btn" aria-label="Close modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-instruction">Enter your campus staff access key to manage items and view private reports.</p>
+                <div class="modal-input-group">
+                    <label for="admin-key-input">Admin Access Key:</label>
+                    <input type="password" id="admin-key-input" placeholder="Enter administrative key" autocomplete="off">
+                </div>
+                <p id="admin-modal-error" class="modal-error hidden"></p>
+            </div>
+            <div class="modal-footer">
+                <button id="admin-modal-cancel" class="btn btn-secondary">Cancel</button>
+                <button id="admin-modal-submit" class="btn btn-primary">Authenticate</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delete Confirmation Modal -->
+    <div id="delete-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title">
+        <div class="modal-card delete-card">
+            <div class="modal-header">
+                <h3 id="delete-modal-title" class="danger-title">⚠️ Confirm Item Deletion</h3>
+                <button id="delete-modal-close" class="modal-close-btn" aria-label="Close modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>Are you sure you want to permanently delete this report?</p>
+                <div class="delete-item-preview">
+                    <strong id="delete-item-name">Item Name</strong>
+                    <span id="delete-item-id" class="delete-item-badge">ID #1</span>
+                </div>
+                <p class="warning-text">This will permanently remove the item from the database, search results, and vector embeddings. This action cannot be undone.</p>
+                <p id="delete-modal-error" class="modal-error hidden"></p>
+            </div>
+            <div class="modal-footer">
+                <button id="delete-modal-cancel" class="btn btn-secondary">Keep Item</button>
+                <button id="delete-modal-confirm" class="btn btn-danger">🗑️ Permanently Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
     <script src="script.js"></script>
 </body>

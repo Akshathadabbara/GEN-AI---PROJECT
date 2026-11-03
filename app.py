@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import logging
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory
 
@@ -9,7 +10,10 @@ from ai_matcher import HybridAIMatcher
 from llm_service import llm_service_instance
 from rag_service import rag_service_instance
 
-app = Flask(__name__, static_folder='.', static_url_path='')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
+logger = logging.getLogger("college_lost_found")
+
+app = Flask(__name__, static_folder=None)
 
 matcher = HybridAIMatcher()
 
@@ -24,16 +28,12 @@ with app.app_context():
         rag_service_instance.sync_all_from_db(conn)
         conn.close()
     except Exception as e:
-        print(f"Warning: Vector store sync deferred: {e}")
+        logger.warning("Vector store sync deferred: %s", e)
 
-# Static file routes
+# Static root route
 @app.route('/')
 def index():
     return send_from_directory('.', 'index.html')
-
-@app.route('/<path:filename>')
-def static_files(filename):
-    return send_from_directory('.', filename)
 
 # -------------------------------------------------------------
 # AI RAG Natural Language Search Endpoint
@@ -87,8 +87,9 @@ def ai_search():
             'results': results
         }), 200
     except Exception as e:
+        logger.error("AI Search error: %s", e, exc_info=True)
         return jsonify({
-            'message': f'Search error occurred: {str(e)}',
+            'message': 'An error occurred while processing the search request.',
             'results': []
         }), 500
     finally:
@@ -300,6 +301,72 @@ def update_item_status(item_id):
     return jsonify({'message': 'Item status updated successfully', 'status': new_status}), 200
 
 # -------------------------------------------------------------
+# Secure Admin Item Deletion Endpoint
+# -------------------------------------------------------------
+@app.route('/api/items/<int:item_id>', methods=['DELETE'])
+def delete_item(item_id):
+    """
+    Secure admin-only item deletion.
+    Permanently deletes an item and cleans up related matches, claims, and vector embeddings.
+    """
+    admin_key = request.headers.get('X-Admin-Key')
+    if not admin_key or admin_key != config.ADMIN_KEY:
+        return jsonify({'success': False, 'message': 'Unauthorized: Valid admin authorization required'}), 403
+
+    if item_id <= 0:
+        return jsonify({'success': False, 'message': 'Invalid item ID'}), 400
+
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT id, item_name FROM items WHERE id = ?", (item_id,))
+        item_row = cursor.fetchone()
+        if not item_row:
+            return jsonify({'success': False, 'message': 'Item not found'}), 404
+
+        item_name = item_row['item_name']
+
+        # Delete related claims
+        cursor.execute("DELETE FROM claims WHERE item_id = ?", (item_id,))
+
+        # Delete related matches
+        cursor.execute("DELETE FROM matches WHERE lost_item_id = ? OR found_item_id = ?", (item_id, item_id))
+
+        # Delete item record
+        cursor.execute("DELETE FROM items WHERE id = ?", (item_id,))
+        conn.commit()
+
+        # Clean up ChromaDB vector store
+        try:
+            rag_service_instance.delete_item(item_id)
+        except Exception as e:
+            logger.warning("Vector store cleanup warning for item %d: %s", item_id, e)
+
+        logger.info("Admin successfully deleted item %d (%s)", item_id, item_name)
+        return jsonify({
+            'success': True,
+            'message': f'Item "{item_name}" deleted successfully',
+            'id': item_id
+        }), 200
+    except sqlite3.Error as e:
+        conn.rollback()
+        logger.error("Database error while deleting item %d: %s", item_id, e, exc_info=True)
+        return jsonify({'success': False, 'message': 'Database error occurred during deletion'}), 500
+    finally:
+        conn.close()
+
+# -------------------------------------------------------------
+# Admin Verification Endpoint
+# -------------------------------------------------------------
+@app.route('/api/admin/verify', methods=['POST'])
+def verify_admin():
+    """Validates administrator authorization credentials."""
+    admin_key = request.headers.get('X-Admin-Key')
+    if not admin_key or admin_key != config.ADMIN_KEY:
+        return jsonify({'authenticated': False, 'message': 'Unauthorized: Invalid admin key'}), 403
+    return jsonify({'authenticated': True, 'message': 'Admin authorization verified'}), 200
+
+# -------------------------------------------------------------
 # Automated Matches Endpoints
 # -------------------------------------------------------------
 @app.route('/api/matches', methods=['GET'])
@@ -429,6 +496,66 @@ def get_stats():
         'resolved_reports': resolved_reports,
         'potential_matches': potential_matches
     })
+
+# -------------------------------------------------------------
+# Safe Static File Route and API Error Handlers
+# -------------------------------------------------------------
+ALLOWED_STATIC_EXTENSIONS = {
+    '.html', '.htm', '.css', '.js', '.json',
+    '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.webp',
+    '.woff', '.woff2', '.ttf', '.eot'
+}
+
+@app.route('/<path:filename>')
+def static_files(filename):
+    """Serves static assets safely while blocking sensitive server files."""
+    # Prevent interception of API routes
+    if filename.startswith('api/') or filename == 'api':
+        return jsonify({'message': 'Endpoint not found'}), 404
+
+    # Prevent path traversal and hidden files
+    normalized = os.path.normpath(filename).replace('\\', '/')
+    parts = normalized.split('/')
+    if any(part.startswith('.') for part in parts):
+        return jsonify({'message': 'Access denied'}), 403
+
+    ext = os.path.splitext(normalized)[1].lower()
+    if ext not in ALLOWED_STATIC_EXTENSIONS:
+        return jsonify({'message': 'File type not permitted'}), 403
+
+    return send_from_directory('.', normalized)
+
+@app.errorhandler(400)
+def handle_bad_request(e):
+    if request.path.startswith('/api/'):
+        return jsonify({'message': 'Bad Request: ' + str(getattr(e, 'description', 'Invalid request'))}), 400
+    return e
+
+@app.errorhandler(404)
+def handle_not_found(e):
+    if request.path.startswith('/api/'):
+        return jsonify({'message': 'Endpoint not found'}), 404
+    return e
+
+@app.errorhandler(405)
+def handle_method_not_allowed(e):
+    if request.path.startswith('/api/'):
+        return jsonify({'message': 'Method not allowed for this endpoint'}), 405
+    return e
+
+@app.errorhandler(500)
+def handle_internal_server_error(e):
+    logger.error("Internal Server Error on %s %s: %s", request.method, request.path, e, exc_info=True)
+    if request.path.startswith('/api/'):
+        return jsonify({'message': 'Internal server error. Please try again later.'}), 500
+    return e
+
+@app.errorhandler(Exception)
+def handle_unexpected_exception(e):
+    logger.error("Unhandled Exception on %s %s: %s", request.method, request.path, e, exc_info=True)
+    if request.path.startswith('/api/'):
+        return jsonify({'message': 'Internal server error'}), 500
+    raise e
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))

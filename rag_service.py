@@ -260,13 +260,18 @@ class RAGService:
 
         retrieved_ids = []
         retrieved_distances = {}
-        if results and "ids" in results and results["ids"]:
-            for id_str, dist in zip(results["ids"][0], results["distances"][0]):
-                item_id = int(id_str)
-                retrieved_ids.append(item_id)
-                # In ChromaDB cosine space: distance in [0, 2], similarity = 1 - (dist / 2)
-                similarity = max(0.0, min(1.0, 1.0 - (dist / 2.0)))
-                retrieved_distances[item_id] = similarity
+        if results and results.get("ids") and len(results["ids"]) > 0 and results["ids"][0]:
+            ids_list = results["ids"][0]
+            dists_list = results["distances"][0] if (results.get("distances") and len(results["distances"]) > 0) else []
+            for idx, id_str in enumerate(ids_list):
+                try:
+                    item_id = int(id_str)
+                    retrieved_ids.append(item_id)
+                    dist = dists_list[idx] if idx < len(dists_list) else 0.5
+                    similarity = max(0.0, min(1.0, 1.0 - (float(dist) / 2.0)))
+                    retrieved_distances[item_id] = similarity
+                except (ValueError, TypeError):
+                    continue
 
         if not retrieved_ids or not db_conn:
             return []

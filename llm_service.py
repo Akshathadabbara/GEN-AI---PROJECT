@@ -5,7 +5,7 @@ import urllib.error
 import config
 
 try:
-    from openai import OpenAI, APIConnectionError, RateLimitError, AuthenticationError, APIError
+    from openai import OpenAI, APIConnectionError, RateLimitError, AuthenticationError, APIError, APITimeoutError, BadRequestError
     _OPENAI_AVAILABLE = True
 except ImportError:
     _OPENAI_AVAILABLE = False
@@ -33,7 +33,7 @@ class OpenAIRAGService:
     def _get_openai_client(self):
         if not self.is_api_key_configured():
             return None
-        return OpenAI(api_key=self.api_key, timeout=self.timeout)
+        return OpenAI(api_key=self.api_key.strip(), timeout=self.timeout)
 
     def synthesize_rag_response(self, query: str, retrieved_items: list) -> dict:
         """
@@ -117,7 +117,16 @@ class OpenAIRAGService:
                 max_tokens=180,
                 temperature=0.2
             )
-            summary_text = response.choices[0].message.content.strip()
+            content = None
+            if response and getattr(response, "choices", None) and len(response.choices) > 0:
+                choice = response.choices[0]
+                if getattr(choice, "message", None):
+                    content = getattr(choice.message, "content", None)
+            
+            summary_text = content.strip() if content else ""
+            if not summary_text:
+                summary_text = "Retrieved candidate records from database. Please review the listed items below."
+
             return {
                 "api_key_configured": True,
                 "summary": summary_text,
@@ -138,17 +147,24 @@ class OpenAIRAGService:
                 "disclaimer": "Possible matches — not confirmed ownership",
                 "status": "rate_limited"
             }
-        except APIConnectionError:
+        except (APIConnectionError, APITimeoutError):
             return {
                 "api_key_configured": True,
                 "summary": "Unable to connect to the OpenAI API (network timeout or offline). Showing semantically retrieved items directly from the database below.",
                 "disclaimer": "Possible matches — not confirmed ownership",
                 "status": "network_error"
             }
-        except Exception as e:
+        except BadRequestError:
             return {
                 "api_key_configured": True,
-                "summary": f"AI service encounter an issue: {str(e)[:100]}. Displaying semantically matched database records below.",
+                "summary": "AI request could not be processed with current parameters. Displaying semantically matched database records below.",
+                "disclaimer": "Possible matches — not confirmed ownership",
+                "status": "request_error"
+            }
+        except Exception:
+            return {
+                "api_key_configured": True,
+                "summary": "AI explanation service encountered a temporary issue. Displaying semantically matched database records below.",
                 "disclaimer": "Possible matches — not confirmed ownership",
                 "status": "api_error"
             }
@@ -193,7 +209,12 @@ class OpenAIRAGService:
                     max_tokens=80,
                     temperature=0.2
                 )
-                text = res.choices[0].message.content.strip()
+                content = None
+                if res and getattr(res, "choices", None) and len(res.choices) > 0:
+                    choice = res.choices[0]
+                    if getattr(choice, "message", None):
+                        content = getattr(choice.message, "content", None)
+                text = content.strip() if content else ""
                 if text:
                     return text
             except Exception:

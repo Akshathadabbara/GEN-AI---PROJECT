@@ -181,3 +181,65 @@ def test_anti_prompt_injection_safety(client):
     data = res.get_json()
     # Ensure it didn't leak secrets or crash
     assert "campus_admin_secret" not in res.get_data(as_text=True)
+
+
+def test_ai_search_non_json_body_returns_400(client):
+    res = client.post('/api/ai/search', data="plain text body", content_type="text/plain")
+    assert res.status_code == 400
+    assert "Invalid request body" in res.get_json()["message"]
+
+
+def test_ai_search_empty_body_returns_400(client):
+    res = client.post('/api/ai/search', data="", content_type="application/json")
+    assert res.status_code == 400
+    assert "Invalid request body" in res.get_json()["message"]
+
+
+def test_ai_search_whitespace_query_returns_400(client):
+    res = client.post('/api/ai/search', json={"query": "    "})
+    assert res.status_code == 400
+    assert "Search query cannot be empty" in res.get_json()["message"]
+
+
+def test_deleted_item_excluded_from_ai_search(client):
+    # Add item
+    res_add = client.post('/api/items', json={
+        "type": "found",
+        "item_name": "Unique Green Umbrella",
+        "category": "Other",
+        "description": "Green folding umbrella with wooden handle",
+        "location": "Cafeteria bench",
+        "student_name": "Finder E",
+        "registration_number": "REG105",
+        "contact_number": "+919999955555",
+        "contact_email": "e@college.edu"
+    })
+    item_id = res_add.get_json()["id"]
+
+    # Search confirms it appears
+    search_before = client.post('/api/ai/search', json={"query": "green umbrella"})
+    assert search_before.status_code == 200
+    ids_before = [item["id"] for item in search_before.get_json()["results"]]
+    assert item_id in ids_before
+
+    # Delete item as admin
+    del_res = client.delete(f'/api/items/{item_id}', headers={"X-Admin-Key": config.ADMIN_KEY})
+    assert del_res.status_code == 200
+
+    # Search again - must not appear
+    search_after = client.post('/api/ai/search', json={"query": "green umbrella"})
+    assert search_after.status_code == 200
+    ids_after = [item["id"] for item in search_after.get_json()["results"]]
+    assert item_id not in ids_after
+
+
+def test_sensitive_files_blocked_from_static_serving(client):
+    res_env = client.get('/.env')
+    assert res_env.status_code == 403
+
+    res_cfg = client.get('/config.py')
+    assert res_cfg.status_code == 403
+
+    res_db = client.get('/lost_found.db')
+    assert res_db.status_code == 403
+
