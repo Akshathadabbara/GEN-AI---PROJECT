@@ -9,4 +9,3 @@ openai>=1.30.0
 # Optional lightweight embedding transformer
 # sentence-transformers>=2.2.0
 
-gunicorn
