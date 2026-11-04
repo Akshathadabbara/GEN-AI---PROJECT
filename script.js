@@ -449,10 +449,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 })
             });
 
-            // 1. Check OpenAI API Key status
+            // 1. Check API Key and summary status
             if (!data.api_key_configured) {
                 aiSetupNotice.classList.remove('hidden');
-            } else if (data.llm_response) {
+            }
+            if (data.llm_response) {
                 aiSummaryText.textContent = data.llm_response;
                 aiSummaryCard.classList.remove('hidden');
             }
@@ -474,7 +475,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         } catch (error) {
             console.error('AI search failed:', error);
-            aiErrorText.textContent = error.message || 'An error occurred while connecting to the AI search service.';
+            if (error.status === 502) {
+                aiErrorText.textContent = 'Server is currently warming up or restarting. Please try your search again in a few seconds.';
+            } else {
+                aiErrorText.textContent = error.message || 'An error occurred while connecting to the AI search service.';
+            }
             aiErrorNotice.classList.remove('hidden');
         } finally {
             aiLoading.classList.add('hidden');

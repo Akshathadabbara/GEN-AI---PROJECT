@@ -1,15 +1,19 @@
 import os
 import re
+import logging
 import chromadb
 from chromadb.config import Settings
 import config
-from ai_matcher import HybridAIMatcher, normalize_text, expand_synonyms
+from ai_matcher import HybridAIMatcher, normalize_text, expand_synonyms, build_item_representation
+
+logger = logging.getLogger("college_lost_found.rag")
 
 class RAGService:
     """
     Retrieval-Augmented Generation (RAG) vector service.
     Indexes lost and found items in ChromaDB using vector embeddings,
     synchronizes with SQLite records, and executes semantic retrieval.
+    Includes automatic deterministic fallback using HybridAIMatcher to ensure zero downtime.
     """
 
     def __init__(self, chroma_path: str = None, collection_name: str = None, in_memory: bool = False):
@@ -17,20 +21,30 @@ class RAGService:
         self.collection_name = collection_name or config.CHROMA_COLLECTION
         self.in_memory = in_memory
         self.matcher = HybridAIMatcher()
+        self.chroma_available = False
+        self.client = None
+        self.collection = None
         self._init_chroma()
 
     def _init_chroma(self):
-        """Initializes ChromaDB client and collection."""
-        if self.in_memory or self.chroma_path == ":memory:":
-            self.client = chromadb.EphemeralClient()
-        else:
-            os.makedirs(self.chroma_path, exist_ok=True)
-            self.client = chromadb.PersistentClient(path=self.chroma_path)
-            
-        self.collection = self.client.get_or_create_collection(
-            name=self.collection_name,
-            metadata={"hnsw:space": "cosine"}
-        )
+        """Initializes ChromaDB client and collection safely."""
+        try:
+            if self.in_memory or self.chroma_path == ":memory:":
+                self.client = chromadb.EphemeralClient()
+            else:
+                os.makedirs(self.chroma_path, exist_ok=True)
+                self.client = chromadb.PersistentClient(path=self.chroma_path)
+                
+            self.collection = self.client.get_or_create_collection(
+                name=self.collection_name,
+                metadata={"hnsw:space": "cosine"}
+            )
+            self.chroma_available = True
+            logger.info("ChromaDB vector store initialized successfully at: %s", self.chroma_path)
+        except Exception as e:
+            self.chroma_available = False
+            self.collection = None
+            logger.warning("ChromaDB vector store initialization failed (%s). Hybrid SQLite fallback active.", e)
 
     def build_item_document(self, item: dict) -> str:
         """
@@ -81,65 +95,78 @@ class RAGService:
 
     def sync_item(self, item: dict):
         """Adds or updates a single item in the ChromaDB vector collection."""
-        if not item or "id" not in item:
+        if not self.chroma_available or not self.collection or not item or "id" not in item:
             return
 
-        item_id = str(item["id"])
-        doc = self.build_item_document(item)
-        metadata = {
-            "id": int(item["id"]),
-            "type": str(item.get("type", "lost")).lower(),
-            "status": str(item.get("status", "active")).lower(),
-            "category": str(item.get("category") or "Other"),
-            "location": str(item.get("location") or "")
-        }
-
-        self.collection.upsert(
-            ids=[item_id],
-            documents=[doc],
-            metadatas=[metadata]
-        )
-
-    def delete_item(self, item_id: int):
-        """Removes an item from the vector store."""
         try:
-            self.collection.delete(ids=[str(item_id)])
-        except Exception:
-            pass
-
-    def sync_all_from_db(self, db_conn):
-        """Synchronizes all active records from SQLite into ChromaDB."""
-        cursor = db_conn.cursor()
-        cursor.execute("SELECT * FROM items")
-        rows = cursor.fetchall()
-
-        if not rows:
-            return 0
-
-        ids = []
-        docs = []
-        metadatas = []
-
-        for row in rows:
-            item = dict(row)
             item_id = str(item["id"])
-            ids.append(item_id)
-            docs.append(self.build_item_document(item))
-            metadatas.append({
+            doc = self.build_item_document(item)
+            metadata = {
                 "id": int(item["id"]),
                 "type": str(item.get("type", "lost")).lower(),
                 "status": str(item.get("status", "active")).lower(),
                 "category": str(item.get("category") or "Other"),
                 "location": str(item.get("location") or "")
-            })
+            }
 
-        if ids:
             self.collection.upsert(
-                ids=ids,
-                documents=docs,
-                metadatas=metadatas
+                ids=[item_id],
+                documents=[doc],
+                metadatas=[metadata]
             )
-        return len(ids)
+        except Exception as e:
+            logger.warning("Failed to sync item %s to vector store: %s", item.get("id"), e)
+
+    def delete_item(self, item_id: int):
+        """Removes an item from the vector store."""
+        if not self.chroma_available or not self.collection:
+            return
+        try:
+            self.collection.delete(ids=[str(item_id)])
+        except Exception as e:
+            logger.warning("Failed to delete item %d from vector store: %s", item_id, e)
+
+    def sync_all_from_db(self, db_conn):
+        """Synchronizes all active records from SQLite into ChromaDB."""
+        if not self.chroma_available or not self.collection:
+            return 0
+
+        try:
+            cursor = db_conn.cursor()
+            cursor.execute("SELECT * FROM items")
+            rows = cursor.fetchall()
+
+            if not rows:
+                return 0
+
+            ids = []
+            docs = []
+            metadatas = []
+
+            for row in rows:
+                item = dict(row)
+                item_id = str(item["id"])
+                ids.append(item_id)
+                docs.append(self.build_item_document(item))
+                metadatas.append({
+                    "id": int(item["id"]),
+                    "type": str(item.get("type", "lost")).lower(),
+                    "status": str(item.get("status", "active")).lower(),
+                    "category": str(item.get("category") or "Other"),
+                    "location": str(item.get("location") or "")
+                })
+
+            if ids:
+                self.collection.upsert(
+                    ids=ids,
+                    documents=docs,
+                    metadatas=metadatas
+                )
+            logger.info("Synchronized %d items to ChromaDB vector store.", len(ids))
+            return len(ids)
+        except Exception as e:
+            logger.warning("ChromaDB batch sync warning: %s", e)
+            return 0
 
     def parse_intent(self, query: str) -> str:
         """
@@ -149,13 +176,11 @@ class RAGService:
         - Otherwise returns 'all'.
         """
         q = query.lower()
-        # "I lost...", "lost my...", "looking for my...", "missing..."
         lost_patterns = [
             r"\bi\s+lost\b", r"\blost\s+my\b", r"\blooking\s+for\s+my\b",
             r"\bmy\s+.*\s+is\s+lost\b", r"\bmisplaced\b", r"\bleft\s+behind\b",
             r"\bwhere\s+is\s+my\b"
         ]
-        # "I found...", "found a...", "picked up..."
         found_patterns = [
             r"\bi\s+found\b", r"\bfound\s+a\b", r"\bfound\s+an\b",
             r"\bpicked\s+up\b", r"\bsomeone\s+left\b"
@@ -163,29 +188,24 @@ class RAGService:
 
         for p in lost_patterns:
             if re.search(p, q):
-                return "found"  # Student lost something, search FOUND items!
+                return "found"  # Student lost something, search FOUND items
 
         for p in found_patterns:
             if re.search(p, q):
-                return "lost"   # Student found something, search LOST reports!
+                return "lost"   # Student found something, search LOST reports
 
         return "all"
 
     def search(self, query: str, scope: str = "all", top_k: int = 5, db_conn = None) -> list:
         """
         Executes semantic vector search against ChromaDB and verifies against SQLite database.
-        Returns candidate items ranked by calibrated similarity score.
+        If ChromaDB is unavailable or encounters errors, seamlessly uses HybridAIMatcher fallback.
         """
         if not query or not query.strip():
             return []
 
         cleaned_query = query.strip()
-
-        # If ChromaDB is empty and DB connection is provided, auto-sync
-        if self.collection.count() == 0 and db_conn:
-            self.sync_all_from_db(db_conn)
-
-        if self.collection.count() == 0:
+        if not db_conn:
             return []
 
         # Determine target item type
@@ -197,115 +217,117 @@ class RAGService:
             if inferred in ("lost", "found"):
                 target_type = inferred
 
-        # Build ChromaDB where filter
-        where_filter = {"status": "active"}
-        if target_type:
-            where_filter = {
-                "$and": [
-                    {"status": "active"},
-                    {"type": target_type}
-                ]
-            }
-
-        n_results = min(top_k * 3, max(1, self.collection.count()))
-        results = None
-        if target_type and scope != "all":
-            # Strict scope requested by user
-            try:
-                results = self.collection.query(
-                    query_texts=[cleaned_query],
-                    n_results=n_results,
-                    where=where_filter
-                )
-            except Exception:
-                results = None
-        elif target_type and scope == "all":
-            # Inferred target type: try target type first, fallback to all active items if none found
-            try:
-                results = self.collection.query(
-                    query_texts=[cleaned_query],
-                    n_results=n_results,
-                    where=where_filter
-                )
-            except Exception:
-                results = None
-
-            if not results or not results.get("ids") or not results["ids"][0]:
-                try:
-                    results = self.collection.query(
-                        query_texts=[cleaned_query],
-                        n_results=n_results,
-                        where={"status": "active"}
-                    )
-                except Exception:
-                    results = None
-        else:
-            try:
-                results = self.collection.query(
-                    query_texts=[cleaned_query],
-                    n_results=n_results,
-                    where={"status": "active"}
-                )
-            except Exception:
-                results = None
-
-        if not results or not results.get("ids") or not results["ids"][0]:
-            try:
-                results = self.collection.query(
-                    query_texts=[cleaned_query],
-                    n_results=n_results
-                )
-            except Exception:
-                return []
-
+        # Attempt ChromaDB semantic vector search first
+        chroma_success = False
         retrieved_ids = []
         retrieved_distances = {}
-        if results and results.get("ids") and len(results["ids"]) > 0 and results["ids"][0]:
-            ids_list = results["ids"][0]
-            dists_list = results["distances"][0] if (results.get("distances") and len(results["distances"]) > 0) else []
-            for idx, id_str in enumerate(ids_list):
-                try:
-                    item_id = int(id_str)
-                    retrieved_ids.append(item_id)
-                    dist = dists_list[idx] if idx < len(dists_list) else 0.5
-                    similarity = max(0.0, min(1.0, 1.0 - (float(dist) / 2.0)))
-                    retrieved_distances[item_id] = similarity
-                except (ValueError, TypeError):
-                    continue
 
-        if not retrieved_ids or not db_conn:
+        if self.chroma_available and self.collection:
+            try:
+                # If ChromaDB collection is empty, attempt a quick sync
+                if self.collection.count() == 0 and db_conn:
+                    self.sync_all_from_db(db_conn)
+
+                if self.collection.count() > 0:
+                    where_filter = {"status": "active"}
+                    if target_type:
+                        where_filter = {
+                            "$and": [
+                                {"status": "active"},
+                                {"type": target_type}
+                            ]
+                        }
+
+                    n_results = min(top_k * 3, max(1, self.collection.count()))
+                    results = None
+
+                    try:
+                        results = self.collection.query(
+                            query_texts=[cleaned_query],
+                            n_results=n_results,
+                            where=where_filter if target_type else {"status": "active"}
+                        )
+                    except Exception:
+                        results = None
+
+                    # If scoped query returned nothing, relax filter
+                    if (not results or not results.get("ids") or not results["ids"][0]) and target_type:
+                        try:
+                            results = self.collection.query(
+                                query_texts=[cleaned_query],
+                                n_results=n_results,
+                                where={"status": "active"}
+                            )
+                        except Exception:
+                            results = None
+
+                    if results and results.get("ids") and len(results["ids"]) > 0 and results["ids"][0]:
+                        ids_list = results["ids"][0]
+                        dists_list = results["distances"][0] if (results.get("distances") and len(results["distances"]) > 0) else []
+                        for idx, id_str in enumerate(ids_list):
+                            try:
+                                item_id = int(id_str)
+                                retrieved_ids.append(item_id)
+                                dist = dists_list[idx] if idx < len(dists_list) else 0.5
+                                similarity = max(0.0, min(1.0, 1.0 - (float(dist) / 2.0)))
+                                retrieved_distances[item_id] = similarity
+                            except (ValueError, TypeError):
+                                continue
+                        if retrieved_ids:
+                            chroma_success = True
+            except Exception as e:
+                logger.warning("ChromaDB vector query error: %s. Using Hybrid matcher fallback.", e)
+                chroma_success = False
+
+        # If ChromaDB succeeded, load records for retrieved IDs
+        if chroma_success and retrieved_ids:
+            cursor = db_conn.cursor()
+            placeholders = ",".join("?" for _ in retrieved_ids)
+            cursor.execute(f"SELECT * FROM items WHERE id IN ({placeholders}) AND status = 'active'", retrieved_ids)
+            candidate_rows = [dict(row) for row in cursor.fetchall()]
+        else:
+            # Fallback: retrieve all active items from SQLite database directly
+            cursor = db_conn.cursor()
+            if target_type and scope != "all":
+                cursor.execute("SELECT * FROM items WHERE type = ? AND status = 'active'", (target_type,))
+            else:
+                cursor.execute("SELECT * FROM items WHERE status = 'active'")
+            candidate_rows = [dict(row) for row in cursor.fetchall()]
+
+        if not candidate_rows:
             return []
 
-        # Retrieve authoritative SQLite database records
-        cursor = db_conn.cursor()
-        placeholders = ",".join("?" for _ in retrieved_ids)
-        cursor.execute(f"SELECT * FROM items WHERE id IN ({placeholders}) AND status = 'active'", retrieved_ids)
-        db_items = [dict(row) for row in cursor.fetchall()]
-
+        # Rank all candidate rows using HybridAIMatcher (TF-IDF + Domain synonyms + Attributes)
+        query_doc = {"item_name": cleaned_query, "description": cleaned_query, "location": cleaned_query}
         ranked_results = []
-        for item in db_items:
+
+        for item in candidate_rows:
             item_id = item["id"]
-            vector_sim = retrieved_distances.get(item_id, 0.5)
+            
+            # Semantic text similarity
+            item_text = build_item_representation(item)
+            text_sim = self.matcher.compute_semantic_similarity(cleaned_query, item_text)
+            
+            # Incorporate ChromaDB vector similarity if available
+            vector_sim = retrieved_distances.get(item_id, text_sim)
+            base_similarity = (vector_sim * 0.6 + text_sim * 0.4) if item_id in retrieved_distances else text_sim
 
-            # Attribute verification & evidence generation using HybridAIMatcher
-            # Create a mock query item for attribute comparison
-            query_doc = {"item_name": cleaned_query, "description": cleaned_query, "location": cleaned_query}
+            # Attribute verification & evidence generation
             attr_eval = self.matcher.evaluate_structured_attributes(query_doc, item)
-
             evidence = list(attr_eval["evidence"])
             
-            # Check location proximity from text query
+            # Proximity and category checks from query text
+            norm_q = normalize_text(cleaned_query)
             item_loc = normalize_text(item.get("location") or "")
-            if item_loc and item_loc in normalize_text(cleaned_query):
+            if item_loc and len(item_loc) > 2 and item_loc in norm_q:
                 evidence.append(f"Location match: {item.get('location')}")
 
-            # Check category match
             item_cat = normalize_text(item.get("category") or "")
-            if item_cat and item_cat != "other" and item_cat in normalize_text(cleaned_query):
+            if item_cat and item_cat != "other" and item_cat in norm_q:
                 evidence.append(f"Category: {item.get('category')}")
 
-            # Combined score: vector similarity + attribute boost
-            combined_score = vector_sim + attr_eval["boost"]
+            # Combined calibrated score
+            combined_score = base_similarity + attr_eval["boost"]
             calibrated_score = round(max(0.05, min(0.96, combined_score)), 3)
 
             # Confidence label
@@ -338,9 +360,10 @@ class RAGService:
             }
             ranked_results.append(item_result)
 
-        # Sort by similarity_score descending
+        # Sort by similarity score descending
         ranked_results.sort(key=lambda x: x["similarity_score"], reverse=True)
         return ranked_results[:top_k]
+
 
 # Global singleton
 rag_service_instance = RAGService()

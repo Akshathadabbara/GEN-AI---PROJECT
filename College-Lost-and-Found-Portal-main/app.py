@@ -1,4 +1,5 @@
 import os
+import time
 import sqlite3
 import logging
 from datetime import datetime
@@ -20,17 +21,31 @@ matcher = HybridAIMatcher()
 def get_db():
     return database.get_db_connection()
 
-# Initialize database and vector store on startup
+# Initialize database schema safely on application boot without blocking port binding
 with app.app_context():
-    database.init_db()
     try:
-        conn = get_db()
-        rag_service_instance.sync_all_from_db(conn)
-        conn.close()
+        database.init_db()
     except Exception as e:
-        logger.warning("Vector store sync deferred: %s", e)
+        logger.warning("Database schema init deferred: %s", e)
 
+# -------------------------------------------------------------
+# Health Check Endpoint (Render & Production Monitoring)
+# -------------------------------------------------------------
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Returns HTTP 200 with service readiness metrics."""
+    return jsonify({
+        'status': 'healthy',
+        'service': 'college_lost_found_portal',
+        'llm_provider': config.LLM_PROVIDER,
+        'api_key_configured': llm_service_instance.is_api_key_configured(),
+        'chroma_available': rag_service_instance.chroma_available,
+        'timestamp': datetime.now().isoformat()
+    }), 200
+
+# -------------------------------------------------------------
 # Static root route
+# -------------------------------------------------------------
 @app.route('/')
 def index():
     return send_from_directory('.', 'index.html')
@@ -43,16 +58,19 @@ def ai_search():
     """
     RAG Search:
     1. Validates student natural-language query.
-    2. Performs semantic vector retrieval across SQLite records via ChromaDB.
-    3. Feeds verified records to OpenAI LLM to synthesize a grounded summary.
+    2. Performs semantic vector retrieval across SQLite records (with Hybrid fallback).
+    3. Feeds verified records to Multi-LLM service (Gemini / OpenRouter / OpenAI) to synthesize a grounded summary.
     4. Returns ranked real database records with similarity metrics.
     """
+    start_time = time.time()
     data = request.get_json(silent=True)
     if not data:
+        logger.warning("Search AI request received invalid or empty JSON body.")
         return jsonify({'message': 'Invalid request body. Expected JSON.'}), 400
 
     query = data.get('query', '').strip()
     if not query:
+        logger.warning("Search AI request received empty query.")
         return jsonify({'message': 'Search query cannot be empty.'}), 400
 
     if len(query) > 500:
@@ -68,6 +86,8 @@ def ai_search():
     except (ValueError, TypeError):
         limit = 5
 
+    logger.info("Executing Search AI: query='%s', scope='%s', limit=%d", query, scope, limit)
+
     conn = get_db()
     try:
         # Retrieve semantically matching candidate items from database
@@ -76,6 +96,10 @@ def ai_search():
         # Pass query and factual records to LLM for grounded conversational explanation
         llm_output = llm_service_instance.synthesize_rag_response(query=query, retrieved_items=results)
 
+        duration = time.time() - start_time
+        logger.info("Search AI completed in %.2fs: %d items retrieved, LLM status: %s",
+                    duration, len(results), llm_output.get('status'))
+
         return jsonify({
             'query': query,
             'scope': scope,
@@ -83,11 +107,12 @@ def ai_search():
             'llm_response': llm_output.get('summary', ''),
             'disclaimer': llm_output.get('disclaimer', 'Possible matches — not confirmed ownership'),
             'status': llm_output.get('status', 'success'),
+            'provider': llm_output.get('provider', 'local'),
             'items_found': len(results),
             'results': results
         }), 200
     except Exception as e:
-        logger.error("AI Search error: %s", e, exc_info=True)
+        logger.error("AI Search error on query '%s': %s", query, e, exc_info=True)
         return jsonify({
             'message': 'An error occurred while processing the search request.',
             'results': []
@@ -211,11 +236,11 @@ def add_item():
             'reported_at': reported_at
         }
 
-        # Sync into ChromaDB vector store
+        # Sync into ChromaDB vector store safely
         try:
             rag_service_instance.sync_item(new_item)
         except Exception as e:
-            print(f"Warning: RAG vector sync error: {e}")
+            logger.warning("RAG vector sync warning: %s", e)
 
         # Compute candidate matches against opposite-type active items
         opposite_type = 'found' if item_type == 'lost' else 'lost'
@@ -253,6 +278,7 @@ def add_item():
         return jsonify({'message': 'Item added successfully', 'id': new_id}), 201
     except sqlite3.Error as e:
         conn.rollback()
+        logger.error("Database error while adding item: %s", e, exc_info=True)
         return jsonify({'message': f'Database error: {e}'}), 500
     finally:
         conn.close()
@@ -447,6 +473,7 @@ def submit_claim():
         return jsonify({'message': 'Claim submitted successfully', 'id': claim_id}), 201
     except sqlite3.Error as e:
         conn.rollback()
+        logger.error("Database error while submitting claim: %s", e, exc_info=True)
         return jsonify({'message': f'Database error: {e}'}), 500
     finally:
         conn.close()
@@ -510,7 +537,7 @@ ALLOWED_STATIC_EXTENSIONS = {
 def static_files(filename):
     """Serves static assets safely while blocking sensitive server files."""
     # Prevent interception of API routes
-    if filename.startswith('api/') or filename == 'api':
+    if filename.startswith('api/') or filename == 'api' or filename.startswith('health'):
         return jsonify({'message': 'Endpoint not found'}), 404
 
     # Prevent path traversal and hidden files
